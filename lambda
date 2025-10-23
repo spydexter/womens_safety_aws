@@ -1,0 +1,22 @@
+def lambda_handler(event, context):
+    
+    score = 100
+    
+    severity_points = {"low": 5, "medium": 15, "high": 30}
+    score -= severity_points.get(event.get("severity", "low"), 0)
+    
+    crowd_points = {"high": 0, "medium": 10, "low": 20}
+    score -= crowd_points.get(event.get("crowd_density", "high"), 0)
+    
+    lighting_points = {"good": 0, "average": 10, "poor": 20}
+    score -= lighting_points.get(event.get("lighting_condition", "good"), 0)
+    
+    time_points = {"day": 0, "evening": 10, "night": 20}
+    score -= time_points.get(event.get("time_of_day", "day"), 0)
+    
+    score = max(0, min(100, score))
+    
+    return {
+        "area_name": event.get("area_name", "Unknown"),
+        "womens_safety_score": score
+    }
