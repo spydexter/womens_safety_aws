@@ -1,22 +1,148 @@
+import boto3
+import re
+import json 
+
+
+dynamodb = boto3.resource('dynamodb', region_name='ap-south-1')
+table = dynamodb.Table('BangaloreWomenSafety')
+
+
+severity_map = {1: 3, 2: 2.5, 3: 2, 4: 1.5, 5: 1}
+crowd_map = {"low": 3, "medium": 2, "high": 1}
+lighting_map = {"well-lit": 3, "dim": 2, "dark": 1}
+
+
+def convert_time_to_period(query_time):
+    query_time = query_time.strip().lower()
+    
+    if re.search(r'\b\d{1,2}\s*am\b', query_time):
+        return "morning"
+    
+    pm_match = re.search(r'(\d{1,2})\s*pm', query_time)
+    if pm_match:
+        hour = int(pm_match.group(1))
+        
+        if hour == 12 or (1 <= hour <= 3):
+            return "afternoon"
+        elif 4 <= hour <= 7:
+            return "evening"
+        else:
+            return "night"
+            
+    return None
+
+
 def lambda_handler(event, context):
     
-    score = 100
+
+    query_params = event.get("queryStringParameters") 
     
-    severity_points = {"low": 5, "medium": 15, "high": 30}
-    score -= severity_points.get(event.get("severity", "low"), 0)
+    if not query_params or "q" not in query_params:
+        # --- RETURN FIX 1 ---
+        return {
+            "statusCode": 400, 
+            "body": json.dumps({"message": "Could not find 'q' in query string. Use ?q=Area at Time (e.g., ?q=Indiranagar at 10 PM)"})
+        }
     
-    crowd_points = {"high": 0, "medium": 10, "low": 20}
-    score -= crowd_points.get(event.get("crowd_density", "high"), 0)
+    query_string = query_params.get("q")
     
-    lighting_points = {"good": 0, "average": 10, "poor": 20}
-    score -= lighting_points.get(event.get("lighting_condition", "good"), 0)
+    time_match = re.search(r'at\s+(.*)', query_string, re.I)
     
-    time_points = {"day": 0, "evening": 10, "night": 20}
-    score -= time_points.get(event.get("time_of_day", "day"), 0)
+    if not time_match:
+
+        return {
+            "statusCode": 400, 
+            "body": json.dumps({"message": "Query must be in the format 'Area at Time' (e.g., 'Indiranagar at 6 PM')."})
+        }
+
+    area = query_string[:time_match.start()].strip().lower()
+    time_str = time_match.group(1).strip()
+    query = query_string 
     
-    score = max(0, min(100, score))
+
+    time_of_day = convert_time_to_period(time_str) 
+    
+    if not time_of_day:
+        # --- RETURN FIX 3 ---
+        return {
+            "statusCode": 400, 
+            "body": json.dumps({"message": f"Invalid time format: {time_str}"})
+        }
+
+
+    try:
+        response = table.scan()
+    except Exception as e:
+        print(e)
+        # --- RETURN FIX 4 ---
+        return {
+            "statusCode": 500, 
+            "body": json.dumps({"message": "Error scanning database."})
+        }
+
+    all_items = response.get("Items", [])
+    
+    items = []
+    for item in all_items:
+        db_area = item.get('area', '').lower()
+        db_time = item.get('time_of_crime', '').lower()
+        
+        if db_area == area and db_time == time_of_day:
+            items.append(item)
+    
+
+    if not items:
+        ai_summary = (
+            f"We have no specific adverse reports for {area.title()} during the {time_of_day}. "
+            f"This is a good sign, but always exercise caution and stay alert."
+        )
+
+        return {
+            "statusCode": 200,
+            "body": json.dumps({
+                "query": query,
+                "area": area.title(),
+                "time": time_of_day,
+                "safety_score": "N/A (No Data)",
+                "ai_summary": ai_summary
+            })
+        }
+
+
+    total_score = 0
+    for item in items:
+        try:
+            severity_num = item.get('severity', 3) 
+            severity = severity_map.get(severity_num, 2) 
+            crowd = crowd_map.get(item.get('crowd_density', 'medium').lower(), 2) 
+            lighting_str = item.get('lighting', 'dim').lower()
+            lighting = lighting_map.get(lighting_str, 2) 
+            police = float(item.get('police_sla', 5)) 
+        except Exception as e:
+            print(f"Error processing item: {e}")
+            severity, crowd, lighting, police = 2, 2, 2, 5
+
+        score = (severity + crowd + lighting) / 3 - (police / 10)
+        total_score += score
+
+    avg_score = round(total_score / len(items), 2)
+    
+
+    ai_summary = (
+        f"Based on {len(items)} reported incident(s), {area.title()} has a numeric "
+        f"Safety Score of {avg_score} for the {time_of_day} (on a scale of ~0-3, where 3 is safest). "
+        f"Please exercise caution and stay alert."
+    )
+    
+    final_response = {
+        "query": query,
+        "area": area.title(),
+        "time": time_of_day,
+        "safety_score": avg_score,
+        "ai_summary": ai_summary
+    }
     
     return {
-        "area_name": event.get("area_name", "Unknown"),
-        "womens_safety_score": score
+        "statusCode": 200,
+        "body": json.dumps(final_response)
     }
