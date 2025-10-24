@@ -35,7 +35,7 @@ The application is fully serverless, ensuring automatic scaling, high availabili
 
 5.  **Score Calculation:** For every matching incident, it runs a custom algorithm:
     * Categorical data is mapped to numbers (e.g., `lighting: "dark" -> 1`, `severity: 5 -> 1`).
-    * A score is calculated: `(severity + crowd + lighting) / 3 - (police_sla / 10)`
+    * A score is calculated: `(severity + crowd + lighting) / 3 - (police_dist) / 10)`
 
 6.  **AI Summary Generation:**
     * The function calculates the `avg_score` (e.g., `2.03`).
